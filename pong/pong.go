@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"time"
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -10,6 +11,13 @@ import (
 const winWidth int = 800
 const winHeight int = 600
 
+type gameState int
+
+const (
+	start gameState = iota
+	play
+)
+var state = start
 
 var nums = [][] byte {
 	{
@@ -108,21 +116,30 @@ func (ball *ball) update(leftPaddle *paddle, rightPaddle *paddle, elapsedTime fl
 	if int(ball.y - ball.radius) < 0 || int(ball.y + ball.radius) > winHeight {
 		ball.yv = -ball.yv
 	}
-	if ball.x < 0  {
+
+	if int(ball.x) < 0  {
 		rightPaddle.score++
 		ball.pos = getCenter()
+		state = start
 	} else if int(ball.x) > winWidth {
 		leftPaddle.score++
 		ball.pos = getCenter()
+		state = start
 	}
-	if ball.x <= leftPaddle.x + leftPaddle.w / 2 {
+
+	if ball.x - ball.radius <= leftPaddle.x + leftPaddle.w / 2 &&
+		ball.x - ball.radius >= leftPaddle.x - leftPaddle.w / 2 {
 		if ball.y > leftPaddle.y - leftPaddle.h / 2 && ball.y < leftPaddle.y + leftPaddle.h / 2  {
 			ball.xv = -ball.xv
+			ball.x = leftPaddle.x + leftPaddle.w / 2 + ball.radius
 		}
 	}
-	if ball.x >= rightPaddle.x - rightPaddle.w / 2 {
+
+	if ball.x + ball.radius >= rightPaddle.x - rightPaddle.w / 2 &&
+		ball.x + ball.radius <= rightPaddle.x + rightPaddle.w / 2 {
 		if ball.y > rightPaddle.y - rightPaddle.h / 2 && ball.y < rightPaddle.y + rightPaddle.h / 2  {
 			ball.xv = -ball.xv
+			ball.x = rightPaddle.x - rightPaddle.w / 2 - ball.radius
 		}
 	}
 }
@@ -154,12 +171,17 @@ func (paddle *paddle) draw(pixels []byte) {
 	drawNumber(pos{numX, 35}, paddle.color, 10, paddle.score, pixels)
 }
 
-func (paddle *paddle) update(keyState []uint8, elapsedTime float32) {
+func (paddle *paddle) update(keyState []uint8, controllerAxis int16, elapsedTime float32) {
 	if keyState[sdl.SCANCODE_UP] != 0 {
 		paddle.y -= paddle.speed * elapsedTime
 	}
 	if keyState[sdl.SCANCODE_DOWN] != 0 {
 		paddle.y += paddle.speed * elapsedTime
+	}
+
+	if math.Abs(float64(controllerAxis)) > 1500 {
+		pct := float32(controllerAxis) / 32767.0
+		paddle.y += paddle.speed * pct * elapsedTime
 	}
 }
 
@@ -214,6 +236,12 @@ func main() {
 	}
 	defer tex.Destroy()
 
+	var controllerHandlers []*sdl.GameController
+	for i := 0; i < sdl.NumJoysticks(); i++ {
+		controllerHandlers = append(controllerHandlers, sdl.GameControllerOpen(i))
+		defer controllerHandlers[i].Close()
+	}
+
 	pixels := make([]byte, winWidth*winHeight*4)
 
 	player1 := paddle{pos{100, 100}, 20, 100, 300, 0, color{255, 255, 255}}
@@ -224,6 +252,7 @@ func main() {
 
 	var frameStart time.Time
 	var elapsedTime float32
+	var controllerAxis int16
 
 	for {
 		frameStart = time.Now()
@@ -234,14 +263,28 @@ func main() {
 				return
 			}
 		}
+
+		for _, controller := range controllerHandlers {
+			if controller != nil {
+				controllerAxis = controller.Axis(sdl.CONTROLLER_AXIS_LEFTY)
+			}
+		}
+
+		if state == play {
+			player1.update(keyState, controllerAxis, elapsedTime * 1.5)
+			player2.aiUpdate(&ball, elapsedTime)
+			ball.update(&player1, &player2, elapsedTime)
+		} else if state == start {
+			if keyState[sdl.SCANCODE_SPACE] != 0 {
+				if player1.score == 5 || player2.score == 5 {
+					player1.score = 0
+					player2.score = 0
+				}
+				state = play
+			}
+		}
+
 		clear(pixels)
-
-		drawNumber(getCenter(), color{255,255,255}, 20, 2, pixels)
-
-		player1.update(keyState, elapsedTime)
-		player2.aiUpdate(&ball, elapsedTime)
-		ball.update(&player1, &player2, elapsedTime)
-
 		player1.draw(pixels)
 		player2.draw(pixels)
 		ball.draw(pixels)
